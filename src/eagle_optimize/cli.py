@@ -6,8 +6,9 @@ from typing import Optional
 
 import typer
 
+from eagle_optimize.banner import render_startup_banner, should_render_startup_banner
 from eagle_optimize.claude_bridge import BackendError, ClaudeCliBackend
-from eagle_optimize.config import load_config, save_config
+from eagle_optimize.config import AppConfig, load_config, save_config
 from eagle_optimize.questionnaire import collect_onboarding_answers
 from eagle_optimize.reports import (
     guess_category_folder,
@@ -41,6 +42,17 @@ history_app = typer.Typer(help="Search prior notes and reports.")
 app.add_typer(config_app, name="config")
 app.add_typer(onboarding_app, name="onboarding")
 app.add_typer(history_app, name="history")
+
+
+@app.callback(invoke_without_command=True)
+def main(ctx: typer.Context) -> None:
+    if should_render_startup_banner():
+        typer.echo(render_startup_banner())
+        typer.echo()
+
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit()
 
 
 def repo_root() -> Path:
