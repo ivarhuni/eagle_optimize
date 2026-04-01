@@ -16,6 +16,7 @@ OBSIDIAN_MIRROR_ROOT = "EagleOptimize"
 class AppConfig:
     backend: str = "claude-code-cli"
     claude_command: str = "claude"
+    copilot_command: str = "copilot"
     obsidian_vault_path: str = ""
     mirror_to_obsidian: bool = True
 
@@ -43,6 +44,7 @@ def load_config() -> AppConfig:
     return AppConfig(
         backend=data.get("backend", "claude-code-cli"),
         claude_command=data.get("claude_command", "claude"),
+        copilot_command=data.get("copilot_command", "copilot"),
         obsidian_vault_path=data.get("obsidian_vault_path", ""),
         mirror_to_obsidian=bool(data.get("mirror_to_obsidian", True)),
     )

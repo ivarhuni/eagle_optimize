@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional, Tuple
 
+from click import Choice
 import typer
 
 from eagle_optimize.banner import render_startup_banner, should_render_startup_banner
 from eagle_optimize.claude_bridge import BackendError, ClaudeCliBackend
+from eagle_optimize.copilot_bridge import CopilotCliBackend
 from eagle_optimize.config import AppConfig, load_config, save_config
 from eagle_optimize.questionnaire import collect_onboarding_answers
 from eagle_optimize.reports import (
@@ -32,9 +34,10 @@ from eagle_optimize.storage import (
     write_json,
     write_text,
 )
+from eagle_optimize.terminal_loader import run_with_funky_loader
 
 
-app = typer.Typer(help="Personal optimization CLI backed by Claude Code.")
+app = typer.Typer(help="Personal optimization CLI backed by Claude Code or GitHub Copilot CLI.")
 config_app = typer.Typer(help="Local machine configuration.")
 onboarding_app = typer.Typer(help="Onboarding and profile management.")
 history_app = typer.Typer(help="Search prior notes and reports.")
@@ -42,6 +45,15 @@ history_app = typer.Typer(help="Search prior notes and reports.")
 app.add_typer(config_app, name="config")
 app.add_typer(onboarding_app, name="onboarding")
 app.add_typer(history_app, name="history")
+
+
+DEFAULT_BACKEND = "claude-code-cli"
+BACKEND_ALIASES = {
+    "claude": "claude-code-cli",
+    "claude-code-cli": "claude-code-cli",
+    "copilot": "github-copilot-cli",
+    "github-copilot-cli": "github-copilot-cli",
+}
 
 
 @app.callback(invoke_without_command=True)
@@ -66,11 +78,55 @@ def require_profile(root: Path) -> Path:
     return profile_path
 
 
+def resolve_backend_name(cli_backend: Optional[str], configured_backend: str) -> str:
+    selected = (cli_backend or configured_backend or DEFAULT_BACKEND).strip().lower()
+    if not selected:
+        selected = DEFAULT_BACKEND
+    return BACKEND_ALIASES.get(selected, selected)
+
+
+def build_backend(cli_backend: Optional[str], config: AppConfig) -> Tuple[str, object]:
+    backend_name = resolve_backend_name(cli_backend, config.backend)
+    if backend_name == "claude-code-cli":
+        return backend_name, ClaudeCliBackend(config.claude_command)
+    if backend_name == "github-copilot-cli":
+        return backend_name, CopilotCliBackend(config.copilot_command)
+    raise typer.Exit(
+        f"Unsupported backend '{backend_name}'. Supported values: claude-code-cli or github-copilot-cli."
+    )
+
+
+def normalize_doctor_result(result: object) -> Dict[str, object]:
+    if isinstance(result, dict):
+        return result
+    return {
+        "command": getattr(result, "command", ""),
+        "available": bool(getattr(result, "available", False)),
+        "version": getattr(result, "version", ""),
+        "authenticated": bool(getattr(result, "authenticated", False)),
+        "auth_detail": getattr(result, "auth_detail", ""),
+    }
+
+
+def backend_prompt_default(configured_backend: str) -> str:
+    normalized_backend = resolve_backend_name(None, configured_backend)
+    if normalized_backend == "github-copilot-cli":
+        return "copilot"
+    return "claude"
+
+
 @config_app.command("init")
 def config_init() -> None:
     """Create or update local machine config."""
     existing = load_config()
+    backend_choice = typer.prompt(
+        "Default backend",
+        default=backend_prompt_default(existing.backend),
+        type=Choice(["claude", "copilot"], case_sensitive=False),
+        show_choices=True,
+    )
     claude_command = typer.prompt("Claude command", default=existing.claude_command)
+    copilot_command = typer.prompt("Copilot command", default=existing.copilot_command)
     mirror_to_obsidian = typer.confirm(
         "Mirror reports into an Obsidian vault?",
         default=existing.mirror_to_obsidian,
@@ -83,8 +139,9 @@ def config_init() -> None:
             show_default=bool(existing.obsidian_vault_path),
         )
     config = AppConfig(
-        backend="claude-code-cli",
+        backend=resolve_backend_name(str(backend_choice), DEFAULT_BACKEND),
         claude_command=claude_command,
+        copilot_command=copilot_command,
         mirror_to_obsidian=mirror_to_obsidian,
         obsidian_vault_path=obsidian_vault_path,
     )
@@ -98,23 +155,30 @@ def config_show() -> None:
     config = load_config()
     typer.echo(f"backend: {config.backend}")
     typer.echo(f"claude_command: {config.claude_command}")
+    typer.echo(f"copilot_command: {config.copilot_command}")
     typer.echo(f"mirror_to_obsidian: {config.mirror_to_obsidian}")
     typer.echo(f"obsidian_vault_path: {config.obsidian_vault_path or '(not set)'}")
 
 
 @app.command()
-def doctor() -> None:
-    """Check Claude CLI availability and auth state."""
+def doctor(
+    backend: Optional[str] = typer.Option(
+        None,
+        help="Optional backend override: claude-code-cli or github-copilot-cli.",
+    )
+) -> None:
+    """Check backend CLI availability and auth state."""
     config = load_config()
-    backend = ClaudeCliBackend(config.claude_command)
-    result = backend.doctor()
-    typer.echo(f"command: {result.command}")
-    typer.echo(f"available: {result.available}")
-    if result.version:
-        typer.echo(f"version: {result.version}")
-    typer.echo(f"authenticated: {result.authenticated}")
-    if result.auth_detail:
-        typer.echo(result.auth_detail)
+    selected_backend, backend_client = build_backend(backend, config)
+    result = normalize_doctor_result(backend_client.doctor())
+    typer.echo(f"backend: {selected_backend}")
+    typer.echo(f"command: {result.get('command', '')}")
+    typer.echo(f"available: {result.get('available', False)}")
+    if result.get("version"):
+        typer.echo(f"version: {result.get('version')}")
+    typer.echo(f"authenticated: {result.get('authenticated', False)}")
+    if result.get("auth_detail"):
+        typer.echo(str(result.get("auth_detail")))
 
 
 @onboarding_app.command("run")
@@ -157,9 +221,13 @@ def onboarding_run(name: Optional[str] = typer.Option(None, help="Descriptive as
 
 @app.command()
 def ask(
-    query: str = typer.Argument(..., help="Optimization question to send to Claude."),
+    query: str = typer.Argument(..., help="Optimization question to send to the selected backend."),
     category: Optional[str] = typer.Option(None, help="Optional category override."),
     title: Optional[str] = typer.Option(None, help="Optional report title override."),
+    backend: Optional[str] = typer.Option(
+        None,
+        help="Optional backend override: claude-code-cli or github-copilot-cli.",
+    ),
 ) -> None:
     """Ask a note-aware question and save a categorized report."""
     root = repo_root()
@@ -168,25 +236,30 @@ def ask(
     profile_markdown = profile_path.read_text(encoding="utf-8")
 
     config = load_config()
-    backend = ClaudeCliBackend(config.claude_command)
-    doctor_result = backend.doctor()
-    if not doctor_result.available:
-        raise typer.Exit("Claude CLI is not available. Install Claude Code first.")
-    if not doctor_result.authenticated:
-        raise typer.Exit("Claude CLI is not authenticated. Run `claude` and log in first.")
+    selected_backend, backend_client = build_backend(backend, config)
+    doctor_result = normalize_doctor_result(backend_client.doctor())
+    if not doctor_result.get("available", False):
+        raise typer.Exit(
+            f"{selected_backend} command is not available. Configure the backend command via `eagle-optimize config init`."
+        )
+    if not doctor_result.get("authenticated", False):
+        auth_detail = str(doctor_result.get("auth_detail", "")).strip()
+        detail = f" Details: {auth_detail}" if auth_detail else ""
+        raise typer.Exit(f"{selected_backend} is not authenticated.{detail}")
 
     related_results = search_notes(root, query, limit=5)
     related_context = render_context_bundle(root, related_results)
     requested_folder = guess_category_folder(query, explicit_value=category)
 
     try:
-        result = backend.answer_question(
-            repo_root=root,
-            query=query,
-            requested_category=requested_folder,
-            profile_markdown=profile_markdown,
-            related_notes=related_context,
-        )
+        with run_with_funky_loader(message="Synthesizing your optimization answer"):
+            result = backend_client.answer_question(
+                repo_root=root,
+                query=query,
+                requested_category=requested_folder,
+                profile_markdown=profile_markdown,
+                related_notes=related_context,
+            )
     except BackendError as error:
         raise typer.Exit(str(error)) from error
 

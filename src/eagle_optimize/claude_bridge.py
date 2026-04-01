@@ -140,6 +140,8 @@ class ClaudeCliBackend:
             self.command,
             "-p",
             "Use the provided context bundle and return only JSON that matches the schema.",
+            "--output-format",
+            "json",
             "--json-schema",
             json.dumps(RESPONSE_SCHEMA),
             "--max-turns",
@@ -158,9 +160,27 @@ class ClaudeCliBackend:
             raise BackendError((result.stderr or result.stdout).strip() or "Claude CLI failed.")
 
         try:
-            return json.loads(result.stdout)
+            envelope = json.loads(result.stdout)
         except json.JSONDecodeError as error:
             raise BackendError(f"Claude returned invalid JSON: {error}") from error
+
+        if envelope.get("is_error"):
+            detail = envelope.get("result") or "Claude reported an error."
+            raise BackendError(f"Claude error: {detail}")
+
+        if envelope.get("subtype") != "success":
+            raise BackendError(
+                f"Claude returned unexpected subtype: {envelope.get('subtype')!r}"
+            )
+
+        structured = envelope.get("structured_output")
+        if not isinstance(structured, dict):
+            raise BackendError(
+                "Claude response is missing structured_output. "
+                f"Raw result field: {str(envelope.get('result', ''))[:200]}"
+            )
+
+        return structured
 
     @staticmethod
     def _build_prompt(query: str, requested_category: str, profile_markdown: str, related_notes: str) -> str:

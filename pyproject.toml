@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "eagle-optimize"
 version = "0.1.0"
-description = "Personal optimization CLI backed by Claude Code"
+description = "Personal optimization CLI backed by Claude Code or GitHub Copilot CLI"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
@@ -28,3 +28,5 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: marks tests that call live external services"]
+addopts = "-m 'not slow'"

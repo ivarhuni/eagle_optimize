@@ -1,6 +1,6 @@
 # eagle_optimize
 
-Cross-platform CLI for personal optimization workflows backed by Claude Code.
+Cross-platform CLI for personal optimization workflows backed by Claude Code (default) or GitHub Copilot CLI.
 
 ## Why this stack
 
@@ -9,7 +9,7 @@ CLI tools are usually not written in React. React can power terminal UIs through
 - Python 3.9+
 - Typer for the CLI surface
 - Markdown and JSON files for durable local records
-- Claude Code CLI as the first AI backend
+- Claude Code CLI as the default AI backend, with optional GitHub Copilot CLI support
 - Optional Obsidian mirroring for desktop note management
 
 That choice is pragmatic for macOS bash and Windows PowerShell:
@@ -19,26 +19,27 @@ That choice is pragmatic for macOS bash and Windows PowerShell:
 - local file storage stays human-readable and Claude-friendly
 - later packaging to single-file binaries with PyInstaller is realistic
 
-## Claude integration recommendation
+## Backend integration recommendation
 
-The supported first implementation is to call the installed `claude` CLI in print mode.
+The default implementation calls the installed `claude` CLI in print mode.
 
 - This fits a user who already has a Claude subscription and uses Claude Code.
 - The app relies on the user's existing Claude Code login state.
-- For a future fallback, the architecture is compatible with a direct Anthropic API backend.
+- A second backend path is available via a configurable Copilot command (`copilot_command`).
 
 Important constraint:
 
 - Anthropic documents the Claude API as API-key based.
 - Claude Code documents a logged-in terminal CLI that can also be scripted.
-- This repo uses the scripted Claude Code CLI path first.
+- Copilot CLI invocation details vary by environment, so this repo uses a configurable command with robust CLI error reporting.
+- This repo keeps Claude Code CLI as the default backend path.
 
 ## What the MVP does
 
 1. Runs a reusable onboarding questionnaire.
 2. Stores a current profile plus timestamped assessment snapshots.
 3. Lets the user ask optimization questions in plain language.
-4. Pulls in relevant past notes before prompting Claude.
+4. Pulls in relevant past notes before prompting the selected backend.
 5. Prints a short terminal answer.
 6. Writes a detailed Markdown report to a categorized folder.
 7. Optionally mirrors reports into an Obsidian vault.
@@ -101,7 +102,7 @@ This project is intentionally conservative for higher-risk medical topics.
 
 ## Setup
 
-### 1. Install Claude Code
+### 1. Install a supported backend CLI
 
 macOS or Linux:
 
@@ -120,6 +121,8 @@ Then log in:
 ```bash
 claude
 ```
+
+If you prefer Copilot as backend, install your Copilot CLI and set `copilot_command` during `eagle-optimize config init`.
 
 ### 2. Install this project
 
@@ -142,6 +145,7 @@ eagle-optimize config init
 That stores local machine config outside the repo and can set:
 
 - the Claude command path
+- the Copilot command path
 - whether Obsidian mirroring is enabled
 - the Obsidian vault path
 
@@ -160,16 +164,19 @@ eagle-optimize ask "Is milk good for me?"
 eagle-optimize ask "How should I think about my ADHD medication conversation with my clinician?"
 ```
 
+While the backend is processing, the CLI now shows a colorful animated loader in the terminal.
+
 Search prior notes:
 
 ```bash
 eagle-optimize history search "digestive response milk"
 ```
 
-Inspect Claude connectivity:
+Inspect backend connectivity:
 
 ```bash
 eagle-optimize doctor
+eagle-optimize doctor --backend github-copilot-cli
 ```
 
 ## Claude Code project support
